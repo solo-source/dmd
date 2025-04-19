@@ -223,3 +223,88 @@ template _d_arraysetlengthTImpl(Tarr : T[], T)
     foreach (s; arr2)
         assert(s == S.init);
 }
+
+/**
+*this template provides a type-safe way to shrink the capacity of an array to match its length.
+*it is meant to replace the runtime hook _d_arrayshrinkfit.
+*right now this Implementation for _d_arrayshrinkfitT function template only forwards to the original implementation.
+*/
+/**
+ * Shrink the "allocated" length of an array to be the exact size of the array.
+ * It doesn't matter what the current allocated length of the array is, the
+ * user is telling the runtime that they know what they are doing.
+ *
+ * Params:
+ *     T = Element type of the array
+ *     arr = Array to shrink
+ */
+void _d_arrayshrinkfitT(T)(T[] arr) @trusted
+{
+    version (D_TypeInfo)
+    {
+        import std.traits : hasElaborateDestructor;
+        // Only shrink‐fit if T has no user destructor
+        static if (!hasElaborateDestructor!T)
+        {
+           if (arr.ptr is null || arr.length == 0)
+                return;
+            _d_arrayshrinkfit(typeid(T[]), cast(void[]) arr);
+        }
+    }
+    else
+    {
+        assert(0, "Cannot shrink array if compiling without support for runtime type information!");
+    }
+}
+
+// Basic test for _d_arrayshrinkfitT
+@system unittest
+{
+    int[] a = new int[20];  // length=20, capacity=20
+    a.reserve(40);          // length=20, capacity≥40
+    a = a[0 .. 5];          // valid: slicing within length
+    a[] = [1,2,3,4,5];
+    auto initialPtr      = a.ptr;
+    auto initialCapacity = a.capacity;
+    assert(initialCapacity > 5, "setup failed: no extra capacity");
+    _d_arrayshrinkfitT(a);
+    assert(a.length == 5,  "length was changed");
+    assert(a.capacity < initialCapacity,
+           "capacity wasn’t reduced");
+    // test that appending stays in the same buffer
+    a ~= 10;
+    assert(a.ptr == initialPtr,
+           "shrink fit failed; reallocated");
+}
+
+@system unittest
+{
+    int[] empty;
+    // This should not crash
+    _d_arrayshrinkfitT(empty);
+    assert(empty.length == 0, "Empty array length changed");
+}
+
+@system unittest
+{
+    static struct S
+    {
+        static int destructorCalls = 0;
+        int value;
+        ~this()
+        {
+            destructorCalls++;
+        }
+    }
+    // skip shrink for destructible T
+    S[] arr = new S[10];
+    arr = arr[0..5];
+    auto initialCap = arr.capacity;
+    S.destructorCalls = 0;
+    // this should be a no-op, since S has a destructor
+    _d_arrayshrinkfitT(arr);
+    // no new destructors, and capacity unchanged
+    assert(S.destructorCalls == 0, "Should not invoke destructors for destructible T");
+    assert(arr.capacity == initialCap,
+        "Should not shrink array of types with destructors");
+}
